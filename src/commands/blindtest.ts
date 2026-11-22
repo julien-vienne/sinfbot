@@ -1,18 +1,22 @@
 import {
+	ModalBuilder,
+	LabelBuilder,
+	TextInputBuilder,
+	TextInputStyle,
+	StringSelectMenuBuilder,
+	StringSelectMenuOptionBuilder,
+	ActionRowBuilder,
 	ButtonBuilder,
 	ButtonStyle,
-	ComponentType,
 	EmbedBuilder,
 	MessageFlags,
 	SlashCommandBuilder,
 	TextChannel,
-	codeBlock,
 	Client,
 	User,
+	bold,
 	type MessageActionRowComponentBuilder
 } from "discord.js";
-
-import { ActionRowBuilder } from "@discordjs/builders";
 
 import type { Command } from "../types";
 import { pipeline } from "node:stream/promises";
@@ -25,7 +29,8 @@ export async function createBlindtest(
 	songUrl: string,
 	requester: User,
 	client: Client,
-	start: number
+	start: number,
+	type: string
 ) {
 	const ytb = new Ytdl();
 	let sentBlindtest;
@@ -35,8 +40,6 @@ export async function createBlindtest(
 	)) as TextChannel;
 
 	const info = await ytb.getInfo(songUrl);
-
-	const startMS = start > info.videoDetails.lengthSeconds ? 0 : start;
 
 	await pipeline(
 		ytb.download(info, {
@@ -49,13 +52,13 @@ export async function createBlindtest(
 	// trim it at 1 min
 	const audio = await ffmpeg("./src/data/audio.mp3");
 	await audio
-		.setVideoStartTime(startMS)
+		.setVideoStartTime(start)
 		.setVideoDuration(60)
 		.save("./src/data/newAudio.mp3");
 
 	// send it to the channel
 	sentBlindtest = await blindtestChannel.send({
-		content: `<@&1572322388316786729>, ${requester} has submitted a new song for you to guess!`,
+		content: `<@&1572322388316786729>, a new blindtest is here!\n ${requester} challenges you to guess ${bold(type)}`,
 		files: [
 			{
 				attachment: "./src/data/newAudio.mp3",
@@ -72,45 +75,103 @@ export async function createBlindtest(
 	return sentBlindtest;
 }
 
-const vote_minutes = Number(process.env.BLINDTEST_VOTE_MINUTES);
-
 const command: Command = {
 	data: new SlashCommandBuilder()
 		.setName("blindtest")
-		.setDescription("Suggest a song for the blindtest")
-		.addStringOption(option =>
-			option
-				.setName("show")
-				.setDescription(
-					"The name of the show (or game) you want to suggest"
-				)
-				.setRequired(true)
-		)
-		.addStringOption(option =>
-			option
-				.setName("link")
-				.setDescription("The youtube link of you requested song")
-				.setRequired(true)
-		)
-		.addNumberOption(option =>
-			option
-				.setName("start")
-				.setDescription(
-					"The timecode in seconds at which you want the song to start (e.g. 90 = start at 1:30)"
-				)
-				.setRequired(false)
-		),
+		.setDescription("Create a new blindtest"),
 
 	execute: async interaction => {
-		const songUrl = interaction.options.getString("link", true);
-		const showName = interaction.options.getString("show", true);
-		const start = interaction.options.getNumber("start", false) ?? 0;
+		const modal = new ModalBuilder()
+			.setCustomId("blindtest")
+			.setTitle("Create a Blindtest");
+
+		const typeSelect = new StringSelectMenuBuilder()
+			.setCustomId("type")
+			.setPlaceholder("Select what players need to guess")
+			.setRequired(true)
+			.addOptions(
+				new StringSelectMenuOptionBuilder()
+					.setLabel("Movie")
+					.setDescription("Guess the movie title")
+					.setValue("the movie"),
+				new StringSelectMenuOptionBuilder()
+					.setLabel("TV Series")
+					.setDescription("Guess the series title")
+					.setValue("the TV Series"),
+				new StringSelectMenuOptionBuilder()
+					.setLabel("Music")
+					.setDescription("Guess the song and artist")
+					.setValue("the song and artist"),
+				new StringSelectMenuOptionBuilder()
+					.setLabel("Video Game")
+					.setDescription("Guess the game title")
+					.setValue("the video game"),
+				new StringSelectMenuOptionBuilder()
+					.setLabel("Full Answer")
+					.setDescription("Guess the show, song, and artist")
+					.setValue("the show, song and artist")
+			);
+		const typeMenu = new LabelBuilder()
+			.setLabel("Answer type")
+			.setStringSelectMenuComponent(typeSelect);
+
+		const answerText = new TextInputBuilder()
+			.setCustomId("answer")
+			.setPlaceholder(
+				"e.g. Imagines Dragons - Zero - Ralph Breaks the Internet"
+			)
+			.setStyle(TextInputStyle.Short)
+			.setRequired(true);
+		const answerLabel = new LabelBuilder()
+			.setLabel("The answer")
+			.setDescription(
+				"Enter the title, artist, or full answer based on the selected type"
+			)
+			.setTextInputComponent(answerText);
+
+		const urlText = new TextInputBuilder()
+			.setCustomId("url")
+			.setPlaceholder("e.g. https://youtu.be/j60ClcNYWu4")
+			.setStyle(TextInputStyle.Short)
+			.setRequired(true);
+		const urlLabel = new LabelBuilder()
+			.setLabel("YouTube URL")
+			.setTextInputComponent(urlText)
+			.setDescription("The video used for this blindtest");
+
+		const startText = new TextInputBuilder()
+			.setCustomId("start")
+			.setPlaceholder("e.g. for 1:30, enter 90")
+			.setStyle(TextInputStyle.Short)
+			.setMaxLength(3)
+			.setRequired(false);
+		const startLabel = new LabelBuilder()
+			.setLabel("Start time (seconds)")
+			.setDescription("Leave empty for 0:00")
+			.setTextInputComponent(startText);
+
+		modal.addLabelComponents(typeMenu, answerLabel, urlLabel);
+		modal.addLabelComponents(startLabel);
+		await interaction.showModal(modal);
+	},
+	modal: async interaction => {
+		const songUrl = interaction.fields.getTextInputValue("url");
+		const answer = interaction.fields.getTextInputValue("answer");
+		const start =
+			interaction.fields.getTextInputValue("start") == ""
+				? "0"
+				: interaction.fields.getTextInputValue("start");
+		const blindtestType =
+			interaction.fields.getStringSelectValues("type")[0];
 		const requester = interaction.user;
 		const ytb = new Ytdl();
+		let startMS = "0";
 
 		// Check whether it is a YouTube link or whether the video is not private
 		try {
 			const info = await ytb.getInfo(songUrl);
+			startMS =
+				Number(start) > info.videoDetails.lengthSeconds ? "0" : start;
 		} catch (error) {
 			interaction.reply({
 				embeds: [
@@ -126,18 +187,21 @@ const command: Command = {
 			return;
 		}
 
+		const songUrlWithStart =
+			Number(startMS) == 0 ? songUrl : songUrl + "?t=" + start;
+
 		const adminChannel = (await interaction.client.channels.fetch(
 			process.env.BLINDTEST_ADMIN_CHANNEL_ID!
 		)) as TextChannel;
 
-		const blindtestChannel = (await interaction.client.channels.fetch(
-			process.env.BLINDTEST_CHANNEL_ID!
-		)) as TextChannel;
-
 		const embedAdmin = new EmbedBuilder()
 			.setTitle("Blindtest")
-			.setDescription(
-				`${requester} has requested a song from ${codeBlock(showName)} Here is the link ${songUrl} \n start at ${start} s`
+			.addFields(
+				{ name: "User", value: `${requester}`, inline: true },
+				{ name: "What to guess", value: blindtestType, inline: true },
+				{ name: "Answer", value: answer, inline: true },
+				{ name: "Link", value: songUrlWithStart },
+				{ name: "Start Time", value: startMS }
 			);
 
 		const approveButton = new ButtonBuilder()
@@ -152,109 +216,13 @@ const command: Command = {
 			.setStyle(ButtonStyle.Secondary)
 			.setEmoji({ name: "❌" });
 
-		const reSubmitButton = new ButtonBuilder()
-			.setCustomId("resubmit")
-			.setLabel("ReSubmit")
-			.setStyle(ButtonStyle.Primary)
-			.setEmoji({ name: "🔁" });
-
 		const actionRow =
 			new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
 				approveButton,
 				rejectButton
 			);
 
-		let vote = await adminChannel.send({
-			embeds: [embedAdmin],
-			components: [actionRow]
-		});
-
-		const collector = vote.createMessageComponentCollector({
-			componentType: ComponentType.Button,
-			time: vote_minutes * 60 * 1000
-		});
-
-		collector.on("collect", async i => {
-			collector.stop();
-			i.deferUpdate(); // Acknoledges the interaction without doing anything
-
-			switch (i.customId) {
-				case "approve":
-					vote.edit({
-						embeds: [
-							embedAdmin
-								.setTitle("Blindtest approved")
-								.setColor(0x00ff00)
-						],
-						components: []
-					});
-
-					const sentBlindtest = await createBlindtest(
-						songUrl,
-						requester,
-						interaction.client,
-						start
-					);
-
-					interaction.user
-						.send({
-							embeds: [
-								new EmbedBuilder()
-									.setTitle("Blindtest approved")
-									.setDescription(
-										`Your Blindtest${codeBlock(showName)}was approved. It is now available publicly.\n\n> [Click here](${sentBlindtest.url}) to view it`
-									)
-									.setColor(0x00ff00)
-							]
-						})
-						.catch(() => undefined);
-
-					break;
-
-				case "reject":
-					vote.edit({
-						embeds: [
-							embedAdmin
-								.setTitle("Blindtest rejected")
-								.setColor(0xff0000)
-						],
-						components: []
-					});
-
-					interaction.user
-						.send({
-							embeds: [
-								new EmbedBuilder()
-									.setTitle("Blindtest rejected")
-									.setDescription(
-										`Your Blindtest${codeBlock(showName)}has been rejected. It will not be shared publicly.`
-									)
-									.setColor(0xff0000)
-							]
-						})
-						.catch(() => undefined);
-
-					break;
-			}
-		});
-
-		collector.on("end", async (_, reason) => {
-			if (reason === "time") {
-				// Vote timed out
-				await vote.edit({
-					embeds: [
-						embedAdmin.setTitle("Vote timed out").setColor(0x808080)
-					],
-					components: [
-						new ActionRowBuilder<MessageActionRowComponentBuilder>().addComponents(
-							reSubmitButton
-						)
-					]
-				});
-			}
-		});
-
-		interaction.reply({
+		await interaction.reply({
 			embeds: [
 				new EmbedBuilder()
 					.setTitle("Blindtest sent")
@@ -265,7 +233,14 @@ const command: Command = {
 			],
 			flags: MessageFlags.Ephemeral
 		});
-	},
-	cooldown: 5
+
+		await adminChannel.send({
+			embeds: [embedAdmin],
+			components: [actionRow]
+		});
+
+		return;
+	}
 };
+
 export default command;
